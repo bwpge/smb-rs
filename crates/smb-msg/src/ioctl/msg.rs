@@ -2,10 +2,14 @@ use super::{
     common::{IoctlBuffer, IoctlRequestContent},
     fsctl::*,
 };
+#[cfg(feature = "server")]
 use binrw::io::TakeSeekExt;
 use binrw::prelude::*;
 use modular_bitfield::prelude::*;
 use smb_dtyp::binrw_util::prelude::*;
+use smb_msg_derive::*;
+
+#[cfg(feature = "client")]
 use std::io::SeekFrom;
 
 use crate::{
@@ -13,40 +17,73 @@ use crate::{
     dfsc::{ReqGetDfsReferral, ReqGetDfsReferralEx, RespGetDfsReferral},
 };
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// SMB2 IOCTL request packet for issuing file system control or device control commands.
+///
+/// Used to send implementation-specific FSCTL/IOCTL commands across the network.
+/// The structure size is fixed at 57 bytes regardless of the buffer size.
+///
+/// MS-SMB2 2.2.31
+#[smb_request(size = 57)]
 pub struct IoctlRequest {
-    #[bw(calc = 57)]
-    #[br(assert(struct_size == 57))]
-    struct_size: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
+    reserved: u16,
+    /// Control code of the FSCTL/IOCTL method to execute
     pub ctl_code: u32,
+    /// File identifier on which to perform the command
     pub file_id: FileId,
+    /// Offset from SMB2 header to input data buffer
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _input_offset: PosMarker<u32>,
+    /// Size in bytes of the input data
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _input_count: PosMarker<u32>,
+    /// Maximum bytes server can return for input data in response
     pub max_input_response: u32,
+    /// Must be set to 0 by client
     #[bw(calc = 0)]
     #[br(assert(output_offset == 0))]
+    #[br(temp)]
     output_offset: u32,
+    /// Must be set to 0 by client
     #[bw(calc = 0)]
     #[br(assert(output_count == 0))]
+    #[br(temp)]
     output_count: u32,
+    /// Maximum bytes server can return for output data in response
     pub max_output_response: u32,
+    /// Indicates whether this is an IOCTL (0x00000000) or FSCTL (0x00000001) request
     pub flags: IoctlRequestFlags,
-    #[bw(calc = 0)]
-    reserved2: u32,
+    reserved: u32,
 
+    /// Variable-length buffer containing input data for the FSCTL/IOCTL command
     #[bw(write_with = PosMarker::write_aoff_size, args(&_input_offset, &_input_count))]
     #[br(map_stream = |s| s.take_seek(_input_count.value as u64), args(ctl_code, flags))]
     pub buffer: IoctlReqData,
 }
 
+#[cfg(all(feature = "client", not(feature = "server")))]
 /// This is a helper trait that defines, for a certain FSCTL request type,
 /// the response type and their matching FSCTL code.
 pub trait FsctlRequest: for<'a> BinWrite<Args<'a> = ()> + Into<IoctlReqData> {
+    type Response: FsctlResponseContent;
+    const FSCTL_CODE: FsctlCodes;
+}
+
+#[cfg(all(feature = "server", not(feature = "client")))]
+/// This is a helper trait that defines, for a certain FSCTL request type,
+/// the response type and their matching FSCTL code.
+pub trait FsctlRequest: for<'a> BinRead<Args<'a> = ()> + Into<IoctlReqData> {
+    type Response: FsctlResponseContent;
+    const FSCTL_CODE: FsctlCodes;
+}
+
+#[cfg(all(feature = "server", feature = "client"))]
+/// This is a helper trait that defines, for a certain FSCTL request type,
+/// the response type and their matching FSCTL code.
+pub trait FsctlRequest:
+    for<'a> BinWrite<Args<'a> = ()> + for<'b> BinRead<Args<'b> = ()> + Into<IoctlReqData>
+{
     type Response: FsctlResponseContent;
     const FSCTL_CODE: FsctlCodes;
 }
@@ -55,16 +92,23 @@ macro_rules! ioctl_req_data {
     ($($fsctl:ident: $model:ty, $response:ty, )+) => {
         pastey::paste! {
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[smb_request_binrw]
 #[br(import(ctl_code: u32, flags: IoctlRequestFlags))]
 pub enum IoctlReqData {
     $(
+        #[doc = concat!(
+            "Ioctl request for FSCTL code `",
+            stringify!($fsctl),
+            "`."
+        )]
         #[br(pre_assert(ctl_code == FsctlCodes::$fsctl as u32 && flags.is_fsctl()))]
         [<Fsctl $fsctl:camel>]($model),
     )+
 
-    /// General Ioctl request, providing a buffer as an input.
+    /// General, non-smb FSCTL ioctl buffer.
+    ///
+    /// In case of an unsupported FSCTL code, this variant can be used to
+    /// pass raw bytes.
     Ioctl(IoctlBuffer),
 }
 
@@ -117,51 +161,64 @@ ioctl_req_data! {
     OffloadRead: OffloadReadRequest, OffloadReadResponse,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Flags field indicating how to process the IOCTL operation.
+///
+/// MS-SMB2 2.2.31
+#[smb_dtyp::mbitfield]
 pub struct IoctlRequestFlags {
+    /// When true (0x00000001), indicates this is an FSCTL request.
+    /// When false (0x00000000), indicates this is an IOCTL request.
     pub is_fsctl: bool,
     #[skip]
     __: B31,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// SMB2 IOCTL response packet containing results of an IOCTL request.
+///
+/// Sent by server to transmit the results of a client SMB2 IOCTL request.
+/// The structure size is fixed at 49 bytes regardless of the buffer size.
+///
+/// MS-SMB2 2.2.32
+#[smb_response(size = 49)]
 pub struct IoctlResponse {
-    #[bw(calc = 49)]
-    #[br(assert(struct_size == 49))]
-    struct_size: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
+    reserved: u16,
+    /// Control code of the FSCTL/IOCTL method that was executed
     pub ctl_code: u32,
+    /// File identifier on which the command was performed
     pub file_id: FileId,
+    /// Offset from SMB2 header to the Buffer field (should be set to buffer offset)
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     input_offset: PosMarker<u32>,
+    /// Should be set to zero (exception for pass-through operations)
     #[bw(assert(in_buffer.is_empty()))] // there is an exception for pass-through operations.
     #[bw(try_calc = in_buffer.len().try_into())]
     #[br(assert(input_count == 0))]
+    #[br(temp)]
     input_count: u32,
 
-    // is either (0) or (input_offset + input_count)
+    /// Offset to output data buffer (either 0 or input_offset + input_count rounded to multiple of 8)
     #[br(assert(output_offset.value == 0 || output_offset.value == input_offset.value + input_count))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     output_offset: PosMarker<u32>,
+    /// Size in bytes of the output data
     #[bw(try_calc = out_buffer.len().try_into())]
+    #[br(temp)]
     output_count: u32,
 
-    #[bw(calc = 0)] // reserved.
-    #[br(assert(flags == 0))]
-    flags: u32,
-    #[bw(calc = 0)]
-    reserved2: u32,
+    /// Flags
+    reserved: u32,
 
+    reserved: u32,
+
+    /// Input data buffer (typically empty for responses except pass-through operations)
     #[br(seek_before = SeekFrom::Start(input_offset.value.into()))]
     #[br(count = input_count)]
     #[bw(write_with = PosMarker::write_aoff, args(&input_offset))]
     pub in_buffer: Vec<u8>,
 
+    /// Output data buffer containing results of the FSCTL/IOCTL operation
     #[br(seek_before = SeekFrom::Start(output_offset.value.into()))]
     #[br(count = output_count)]
     #[bw(write_with = PosMarker::write_aoff, args(&output_offset))]
@@ -169,7 +226,16 @@ pub struct IoctlResponse {
 }
 
 impl IoctlResponse {
-    /// Parses the response content into the specified type.
+    #[cfg(feature = "client")]
+    /// Parses the FSCTL response output buffer into the specified response type.
+    ///
+    /// Validates that the control code matches the expected FSCTL codes for the
+    /// response type before attempting to parse the output buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MissingFsctlDefinition` if the control code doesn't match
+    /// any of the expected FSCTL codes for the response type.
     pub fn parse_fsctl<T>(&self) -> crate::Result<T>
     where
         T: FsctlResponseContent,

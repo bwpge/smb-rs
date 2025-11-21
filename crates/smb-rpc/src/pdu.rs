@@ -3,7 +3,6 @@
 
 use binrw::io::TakeSeekExt;
 use binrw::prelude::*;
-use modular_bitfield::prelude::*;
 use smb_dtyp::Guid;
 use smb_dtyp::binrw_util::prelude::*;
 use smb_dtyp::make_guid;
@@ -29,6 +28,7 @@ macro_rules! rpc_pkts {
 #[brw(little)]
 pub struct [<DceRpcCo $name Pkt>] {
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _save_pdu_start: PosMarker<()>,
     #[br(assert(rpc_ver == DCE_RPC_VERSION))]
     #[bw(calc = DCE_RPC_VERSION)]
@@ -39,6 +39,7 @@ pub struct [<DceRpcCo $name Pkt>] {
     pfc_flags: DceRpcCoPktFlags,
     pub packed_drep: u32,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _frag_length: PosMarker<u16>,
     #[br(assert(auth_length == 0))]
     #[bw(calc = 0)]
@@ -171,10 +172,7 @@ pub struct DceRpcVersion {
     pub minor: u8,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 
 pub struct DceRpcCoPktFlags {
     pub first_frag: bool,
@@ -207,8 +205,10 @@ pub struct DcRpcCoPktBind {
     num_context_items: u8,
 
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u8,
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved2: u16,
 
     #[br(count = num_context_items)]
@@ -222,6 +222,7 @@ pub struct DcRpcCoPktBindContextElement {
     #[bw(calc = transfer_syntaxes.len() as u8)]
     pub num_transfer_syntaxes: u8,
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u8,
     pub abstract_syntax: DceRpcSyntaxId,
     #[br(count = num_transfer_syntaxes)]
@@ -264,8 +265,10 @@ pub struct DcRpcCoPktBindAck {
     #[bw(calc = results.len() as u8)]
     num_results: u8,
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u8,
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved2: u16,
 
     #[br(count = num_results)]
@@ -349,6 +352,7 @@ pub struct DcRpcCoPktResponse {
     pub context_id: u16,
     pub cancel_count: u8,
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u8,
 
     #[br(parse_with = binrw::helpers::until_eof)]

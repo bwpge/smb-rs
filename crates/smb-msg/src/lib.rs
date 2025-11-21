@@ -1,5 +1,5 @@
-//! SMB Message definitions and utilities crate
-
+#![doc = include_str!("../README.md")]
+#![forbid(unsafe_code)]
 #![allow(unused_parens)]
 
 pub mod cancel;

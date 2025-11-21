@@ -1,11 +1,17 @@
-use binrw::{NullWideString, io::TakeSeekExt, prelude::*};
+//! Distributed File System Referral Protocol (MS-DFSC) messages.
+//!
+//! [MS-DFSC](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dfsc/)
+
+#[cfg(feature = "server")]
+use binrw::io::TakeSeekExt;
+use binrw::{NullWideString, prelude::*};
 use modular_bitfield::prelude::*;
 use smb_dtyp::binrw_util::prelude::*;
+use smb_msg_derive::smb_request_binrw;
 
 /// [MS-DFSC 2.2.2](<https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dfsc/663c9b38-41b8-4faa-b6f6-a4576b4cea62>):
 /// DFS referral requests are sent in the form of an REQ_GET_DFS_REFERRAL message, by using an appropriate transport as specified in section 2.1.
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[smb_request_binrw]
 pub struct ReqGetDfsReferral {
     /// An integer that indicates the highest DFS referral version understood by the client. The DFS referral versions specified by this document are 1 through 4 inclusive. A DFS client MUST support DFS referral version 1 through the version number set in this field. The referral response messages are referral version dependent and are specified in sections 2.2.5.1 through 2.2.5.4.
     pub max_referral_level: ReferralLevel,
@@ -15,8 +21,7 @@ pub struct ReqGetDfsReferral {
 
 /// The DFS referral version supported by the client.
 /// See [`ReqGetDfsReferral::max_referral_level`].
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[smb_request_binrw]
 #[brw(repr(u16))]
 pub enum ReferralLevel {
     /// DFS referral version 1
@@ -29,8 +34,7 @@ pub enum ReferralLevel {
     V4 = 4,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[smb_request_binrw]
 pub struct ReqGetDfsReferralEx {
     /// An integer that indicates the highest DFS referral version understood by the client. The DFS referral versions specified by this document are 1 through 4 inclusive. A DFS client MUST support DFS referral version 1 through the version number set in this field. The referral response messages are referral version dependent and are specified in sections 2.2.5.1 through 2.2.5.4.
     pub max_referral_level: u16,
@@ -41,10 +45,7 @@ pub struct ReqGetDfsReferralEx {
     pub request_data: DfsRequestData,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct DfsRequestFlags {
     /// SiteName present: The SiteName bit MUST be set to 1 if the packet contains the site name of the client.
     pub site_name: bool,
@@ -53,8 +54,7 @@ pub struct DfsRequestFlags {
 }
 
 /// RequestData is part of the REQ_GET_DFS_REFERRAL_EX message (section 2.2.3).
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[smb_request_binrw]
 pub struct DfsRequestData {
     #[bw(try_calc = request_file_name.size().try_into())]
     request_file_name_length: u16,
@@ -77,11 +77,12 @@ impl DfsRequestData {
 }
 
 /// NOTE: This struct currently implements [`BinWrite`] only as a placeholder (calling it will panic).
+/// [`BinRead`] is implemented and can be used to read DFS referral responses.
 #[binrw::binread]
 #[derive(Debug, PartialEq, Eq)]
 pub struct RespGetDfsReferral {
     pub path_consumed: u16,
-    // #[bw(try_calc = referral_entries.len().try_into())]
+    #[bw(try_calc = referral_entries.len().try_into())]
     #[br(temp)]
     number_of_referrals: u16,
     pub referral_header_flags: ReferralHeaderFlags,
@@ -105,10 +106,7 @@ impl BinWrite for RespGetDfsReferral {
     }
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct ReferralHeaderFlags {
     /// Whether all of the targets in the referral entries returned are DFS root targets capable of handling DFS referral requests.
     pub referral_servers: bool,
@@ -127,6 +125,7 @@ pub struct ReferralEntry {
     #[bw(calc = value.get_version())]
     pub version: u16,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _size: PosMarker<u16>,
 
     #[br(args(version))]
@@ -199,6 +198,7 @@ pub enum DfsServerType {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReferralEntryValueV2 {
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _start: PosMarker<()>,
     /// Type of server hosting the target
     pub server_type: DfsServerType,
@@ -211,15 +211,19 @@ pub struct ReferralEntryValueV2 {
     pub time_to_live: u32,
     #[br(assert(dfs_path_offset.value >= ReferralEntry::COMMON_PART_SIZE as u16))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     dfs_path_offset: PosMarker<u16>,
     #[br(assert(dfs_alternate_path_offset.value >= ReferralEntry::COMMON_PART_SIZE as u16))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     dfs_alternate_path_offset: PosMarker<u16>,
     #[br(assert(network_address_offset.value >= ReferralEntry::COMMON_PART_SIZE as u16))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     network_address_offset: PosMarker<u16>,
 
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _restore_position: PosMarker<()>,
 
     /// The DFS path that corresponds to the DFS root or the DFS link for which target information is returned.
@@ -257,10 +261,7 @@ impl ReferralEntryValueV3 {
     pub const COMMON_PART_SIZE: usize = std::mem::size_of::<u16>() * 2 + std::mem::size_of::<u32>();
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct ReferralEntryFlags {
     #[skip]
     __: bool,
@@ -295,20 +296,25 @@ impl EntryV3Value {
 #[derive(Debug, PartialEq, Eq)]
 pub struct EntryV3V4DfsPaths {
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _start: PosMarker<()>,
     #[br(assert(dfs_path_offset.value >= EntryV3Value::OFFSET_FROM_ENTRY_START))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     dfs_path_offset: PosMarker<u16>,
     #[br(assert(dfs_alternate_path_offset.value >= EntryV3Value::OFFSET_FROM_ENTRY_START))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     dfs_alternate_path_offset: PosMarker<u16>,
     #[br(assert(network_address_offset.value >= EntryV3Value::OFFSET_FROM_ENTRY_START))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     network_address_offset: PosMarker<u16>,
     #[bw(calc = 0)]
     _service_site_guid: u128,
 
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _restore_position: PosMarker<()>,
 
     /// The DFS path that corresponds to the DFS root or the DFS link for which target information is returned.
@@ -334,16 +340,20 @@ pub struct EntryV3V4DfsPaths {
 #[derive(Debug, PartialEq, Eq)]
 pub struct EntryV3DCRefs {
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _start: PosMarker<()>,
     #[br(assert(special_name_offset.value >= EntryV3Value::OFFSET_FROM_ENTRY_START))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     special_name_offset: PosMarker<u16>,
     number_of_expanded_names: u16,
     #[br(assert(expanded_name_offset.value >= EntryV3Value::OFFSET_FROM_ENTRY_START))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     expanded_name_offset: PosMarker<u16>,
 
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _restore_position: PosMarker<()>,
 
     #[br(seek_before = _start.seek_from((special_name_offset.value - EntryV3Value::OFFSET_FROM_ENTRY_START).into()))]
@@ -372,10 +382,7 @@ pub struct ReferralEntryValueV4 {
 }
 
 /// Internal.
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 struct ReferralEntryFlagsV4 {
     #[skip]
     __: B2,
@@ -388,16 +395,17 @@ struct ReferralEntryFlagsV4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smb_tests::*;
+    use crate::*;
 
-    test_binrw! {
+    test_binrw_request! {
         struct ReqGetDfsReferral {
             max_referral_level: ReferralLevel::V4,
             request_file_name: r"\ADC.aviv.local\dfs\Docs".into(),
         } => "04005c004100440043002e0061007600690076002e006c006f00630061006c005c006400660073005c0044006f00630073000000"
     }
 
-    test_binrw_read! {
+    #[cfg(feature = "client")]
+    smb_tests::test_binrw_read! {
         struct RespGetDfsReferral {
             path_consumed: 48,
             referral_header_flags: ReferralHeaderFlags::new().with_storage_servers(true),

@@ -1,23 +1,25 @@
 //! Cancel Request
 
 use binrw::prelude::*;
+use smb_msg_derive::*;
 
-#[binrw::binrw]
-#[derive(Debug, Default, PartialEq, Eq)]
+/// SMB2 CANCEL Request structure
+///
+/// Sent by the client to cancel a previously sent message on the same SMB2 transport connection.
+///
+/// Reference: MS-SMB2 2.2.30
+#[smb_request(size = 4)]
+#[derive(Default)]
 pub struct CancelRequest {
-    #[br(assert(_structure_size == 4))]
-    #[bw(calc = 4)]
-    _structure_size: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
+    reserved: u16,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smb_tests::*;
+    use crate::*;
 
-    test_binrw! {
+    test_binrw_request! {
         struct CancelRequest {} => "04000000"
     }
 }

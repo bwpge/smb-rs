@@ -26,6 +26,7 @@ pub struct SmbdNegotiateRequest {
     max_version: u16,
 
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u16,
 
     pub credits_requested: u16,
@@ -53,6 +54,7 @@ pub struct SmbdNegotiateResponse {
     #[br(assert(negotiated_version == SMBD_VERSION))]
     negotiated_version: u16,
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u16,
 
     pub credits_requested: u16,
@@ -82,6 +84,7 @@ pub struct SmbdDataTransferHeader {
     pub flags: SmbdDataTransferFlags,
 
     #[bw(calc = 0)]
+    #[br(temp)]
     _reserved: u16,
 
     pub remaining_data_length: u32,
@@ -95,10 +98,7 @@ impl SmbdDataTransferHeader {
     pub const DATA_ALIGNMENT: u32 = 8;
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct SmbdDataTransferFlags {
     /// The peer is requested to promptly send a message in response. This value is used for keep alives.
     pub response_requested: bool,

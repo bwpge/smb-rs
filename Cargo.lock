@@ -2530,8 +2530,18 @@ dependencies = [
  "modular-bitfield",
  "pastey",
  "rand 0.8.5",
+ "smb-dtyp-derive",
  "smb-tests",
  "time",
+]
+
+[[package]]
+name = "smb-dtyp-derive"
+version = "0.10.4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -2558,9 +2568,19 @@ dependencies = [
  "pastey",
  "smb-dtyp",
  "smb-fscc",
+ "smb-msg-derive",
  "smb-tests",
  "thiserror 2.0.17",
  "time",
+]
+
+[[package]]
+name = "smb-msg-derive"
+version = "0.10.4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.108",
 ]
 
 [[package]]

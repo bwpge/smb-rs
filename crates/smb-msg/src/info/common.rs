@@ -3,8 +3,8 @@
 use binrw::prelude::*;
 use modular_bitfield::prelude::*;
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[smb_message_binrw]
+#[derive(Copy, Clone)]
 #[brw(repr(u8))]
 pub enum InfoType {
     File = 0x1,
@@ -13,10 +13,7 @@ pub enum InfoType {
     Quota = 0x4,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct AdditionalInfo {
     pub owner_security_information: bool,
     pub group_security_information: bool,
@@ -43,7 +40,6 @@ pub struct AdditionalInfo {
 ///   - implementations of `From<ContentType>` for each content type.
 ///   - Methods to unwrap the content type, named `as_<variant_name_in_snake_case>()`.
 /// 2. A generic struct names `Raw<name>` to hold the raw data, with a method to convert it to the actual data.
-#[macro_export]
 macro_rules! query_info_data {
     ($name:ident $($info_type:ident: $content:ty, )+) => {
         pastey::paste! {
@@ -159,3 +155,6 @@ macro_rules! query_info_data {
         }
     };
 }
+
+pub(crate) use query_info_data;
+use smb_msg_derive::smb_message_binrw;

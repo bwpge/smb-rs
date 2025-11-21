@@ -56,10 +56,7 @@ pub struct FileFsAttributeInformation {
 /// File system attributes.
 ///
 /// Used in [`FileFsAttributeInformation`]
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct FileSystemAttributes {
     /// The file system supports case-sensitive file names when looking up (searching for) file names in a directory.
     pub case_sensitive_search: bool,
@@ -157,10 +154,7 @@ pub enum FsDeviceType {
 /// Characteristics of a file system volume.
 ///
 /// See [`FileFsDeviceInformation`]
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct FsDeviceCharacteristics {
     /// Indicates that the storage device supports removable media.
     /// Notice that this characteristic indicates removable media, not a removable device.
@@ -207,10 +201,7 @@ pub struct FsDeviceCharacteristics {
 /// File system control flags.
 ///
 /// Used in [`FileFsControlInformation`]
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct FileSystemControlFlags {
     /// Quotas are tracked on the volume, but they are not enforced.
     /// Tracked quotas enable reporting on the file system space used by system users.
@@ -312,10 +303,7 @@ pub struct FileFsSectorSizeInformation {
 }
 
 /// File system sector flags.
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp::mbitfield]
 pub struct SectorSizeInfoFlags {
     /// When set, this flag indicates that the first physical sector of the device is aligned with the first logical sector.
     /// When not set, the first physical sector of the device is misaligned with the first logical sector.
@@ -365,7 +353,8 @@ pub struct FileFsVolumeInformation {
     ///  Set to TRUE if the file system supports object-oriented file system objects; set to FALSE otherwise.
     pub supports_objects: Boolean,
     #[bw(calc = 0)]
-    reserved: u8,
+    #[br(temp)]
+    _reserved: u8,
     /// The content of this field can be a null-terminated string or can be a string padded with the space character to be VolumeLabelLength bytes long.
     #[br(args { size: SizedStringSize::bytes(volume_label_length) })]
     pub volume_label: SizedWideString,

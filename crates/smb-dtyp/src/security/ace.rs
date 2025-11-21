@@ -3,6 +3,7 @@
 use binrw::io::TakeSeekExt;
 use binrw::prelude::*;
 use modular_bitfield::prelude::*;
+use smb_dtyp_derive::mbitfield;
 
 use crate::{binrw_util::prelude::*, guid::Guid};
 
@@ -85,9 +86,11 @@ macro_rules! access_mask {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ACE {
     #[bw(calc = value.get_type())]
+    #[br(temp)]
     pub ace_type: AceType,
     pub ace_flags: AceFlags,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _ace_size: PosMarker<u16>,
     #[br(args(ace_type))]
     #[br(map_stream = |s| s.take_seek(_ace_size.value as u64 - Self::HEADER_SIZE))]
@@ -246,6 +249,7 @@ pub struct MandatoryLabelAccessMask {
 pub struct AccessObjectAce {
     pub access_mask: ObjectAccessMask,
     #[bw(calc = ObjectAceFlags::new().with_object_type_present(object_type.is_some()).with_inherited_object_type_present(inherited_object_type.is_some()))]
+    #[br(temp)]
     pub flags: ObjectAceFlags,
     #[br(if(flags.object_type_present()))]
     pub object_type: Option<Guid>,
@@ -254,10 +258,7 @@ pub struct AccessObjectAce {
     pub sid: SID,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[mbitfield]
 pub struct ObjectAceFlags {
     pub object_type_present: bool,
     pub inherited_object_type_present: bool,
@@ -279,6 +280,7 @@ pub struct AccessCallbackAce {
 pub struct AccessObjectCallbackAce {
     pub access_mask: ObjectAccessMask,
     #[bw(calc = ObjectAceFlags::new().with_object_type_present(object_type.is_some()).with_inherited_object_type_present(inherited_object_type.is_some()))]
+    #[br(temp)]
     pub flags: ObjectAceFlags,
     #[br(if(flags.object_type_present()))]
     pub object_type: Option<Guid>,
@@ -307,10 +309,12 @@ pub struct SystemResourceAttributeAce {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ClaimSecurityAttributeRelativeV1 {
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _name: PosMarker<u32>, // TODO: Figure out what this is.
     pub value_type: ClaimSecurityAttributeType,
     #[bw(calc = 0)]
-    reserved: u16,
+    #[br(temp)]
+    _reserved: u16,
     pub flags: FciClaimSecurityAttributes,
     value_count: u32,
     #[br(parse_with = binrw::helpers::until_eof)]
@@ -330,10 +334,7 @@ pub enum ClaimSecurityAttributeType {
     OctetString = 6,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[mbitfield]
 pub struct FciClaimSecurityAttributes {
     pub non_inheritable: bool,
     pub value_case_sensitive: bool,
@@ -377,10 +378,7 @@ pub enum AceType {
     SystemScopedPolicyId = 19,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[mbitfield]
 pub struct AceFlags {
     pub object_inherit: bool,
     pub container_inherit: bool,

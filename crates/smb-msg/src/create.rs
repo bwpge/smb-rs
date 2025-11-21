@@ -1,7 +1,10 @@
 //! Create & Close (files) requests and responses.
 
 use std::fmt::{Debug, Display};
-use std::io::{Cursor, SeekFrom};
+use std::io::Cursor;
+
+#[cfg(feature = "client")]
+use std::io::SeekFrom;
 
 use super::header::Status;
 use super::*;
@@ -11,6 +14,7 @@ use modular_bitfield::prelude::*;
 use smb_dtyp::SecurityDescriptor;
 use smb_dtyp::{Guid, binrw_util::prelude::*};
 use smb_fscc::*;
+use smb_msg_derive::*;
 
 /// 2.2.14.1: SMB2_FILEID
 #[binrw::binrw]
@@ -60,212 +64,246 @@ impl Debug for FileId {
     }
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// The SMB2 CREATE Request packet is sent by a client to request either creation of
+/// or access to a file. In case of a named pipe or printer, the server creates a new file.
+///
+/// Reference: MS-SMB2 2.2.13
+#[smb_request(size = 57)]
 pub struct CreateRequest {
-    #[bw(calc = 57)]
-    #[br(assert(_structure_size == 57))]
-    _structure_size: u16,
-    #[bw(calc = 0)] // reserved
-    #[br(assert(_security_flags == 0))]
-    _security_flags: u8,
+    /// SecurityFlags
+    reserved: u8,
+    /// The requested oplock level for this file open
     pub requested_oplock_level: OplockLevel,
+    /// The impersonation level requested by the application issuing the create request
     pub impersonation_level: ImpersonationLevel,
-    #[bw(calc = 0)]
-    #[br(assert(_smb_create_flags == 0))]
-    _smb_create_flags: u64,
-    #[bw(calc = 0)]
-    _reserved: u64,
+    /// SmbCreateFlags
+    reserved: u64,
+    reserved: u64,
+    /// The level of access required for the file or pipe
     pub desired_access: FileAccessMask,
+    /// File attributes to be applied when creating or opening the file
     pub file_attributes: FileAttributes,
+    /// Specifies the sharing mode for the open
     pub share_access: ShareAccessFlags,
+    /// Defines the action the server must take if the file already exists
     pub create_disposition: CreateDisposition,
+    /// Options to be applied when creating or opening the file
     pub create_options: CreateOptions,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _name_offset: PosMarker<u16>,
     #[bw(try_calc = name.size().try_into())]
+    #[br(temp)]
     name_length: u16, // bytes
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _create_contexts_offset: PosMarker<u32>,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _create_contexts_length: PosMarker<u32>,
 
+    /// The Unicode file name to be created or opened
     #[brw(align_before = 8)]
     #[bw(write_with = PosMarker::write_aoff, args(&_name_offset))]
     #[br(args { size: SizedStringSize::bytes16(name_length) })]
     pub name: SizedWideString,
 
+    /// The list of create contexts sent in this request.
     /// Use the [`CreateContextRequestData`]`::first_...` function family to get the first context of a specific type.
     #[brw(align_before = 8)]
     #[br(map_stream = |s| s.take_seek(_create_contexts_length.value.into()))]
     #[bw(write_with = PosMarker::write_roff_size, args(&_create_contexts_offset, &_create_contexts_length))]
-    pub contexts: ChainedItemList<RequestCreateContext, 8>,
+    pub contexts: ChainedItemList<CreateContextRequest, 8>,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+/// The impersonation level requested by the application issuing the create request.
+///
+/// Reference: MS-SMB2 2.2.13
+#[smb_request_binrw]
+#[derive(Copy, Clone)]
 #[brw(repr(u32))]
 pub enum ImpersonationLevel {
+    /// The application-requested impersonation level is Anonymous
     Anonymous = 0x0,
+    /// The application-requested impersonation level is Identification
     Identification = 0x1,
+    /// The application-requested impersonation level is Impersonation
     Impersonation = 0x2,
+    /// The application-requested impersonation level is Delegate
     Delegate = 0x3,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq, Copy, Clone, Default)]
+/// Defines the action the server must take if the file already exists.
+/// For opening named pipes, this field can be set to any value and is ignored by the server.
+///
+/// Reference: MS-SMB2 2.2.13
+#[smb_request_binrw]
+#[derive(Copy, Clone, Default)]
 #[brw(repr(u32))]
 pub enum CreateDisposition {
+    /// If the file already exists, supersede it. Otherwise, create the file
     Superseded = 0x0,
+    /// If the file already exists, return success; otherwise, fail the operation
     #[default]
     Open = 0x1,
+    /// If the file already exists, fail the operation; otherwise, create the file
     Create = 0x2,
+    /// Open the file if it already exists; otherwise, create the file
     OpenIf = 0x3,
+    /// Overwrite the file if it already exists; otherwise, fail the operation
     Overwrite = 0x4,
+    /// Overwrite the file if it already exists; otherwise, create the file
     OverwriteIf = 0x5,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Default, Debug, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Options to be applied when creating or opening the file.
+///
+/// Reference: MS-SMB2 2.2.13
+#[smb_dtyp::mbitfield]
 pub struct CreateOptions {
+    /// The file being created or opened is a directory file
     pub directory_file: bool,
+    /// The server performs file write-through
     pub write_through: bool,
+    /// Application intends to read or write at sequential offsets
     pub sequential_only: bool,
+    /// File buffering is not performed on this open
     pub no_intermediate_buffering: bool,
 
+    /// Should be set to 0 and is ignored by the server
     pub synchronous_io_alert: bool,
+    /// Should be set to 0 and is ignored by the server
     pub synchronous_io_nonalert: bool,
+    /// If the name matches an existing directory file, the server must fail the request
     pub non_directory_file: bool,
     #[skip]
     __: bool,
 
+    /// Should be set to 0 and is ignored by the server
     pub complete_if_oplocked: bool,
+    /// The caller does not understand how to handle extended attributes
     pub no_ea_knowledge: bool,
+    /// Should be set to 0 and is ignored by the server
     pub open_remote_instance: bool,
+    /// Application intends to read or write at random offsets
     pub random_access: bool,
 
+    /// The file must be automatically deleted when the last open request is closed
     pub delete_on_close: bool,
+    /// Should be set to 0 and the server must fail the request if set
     pub open_by_file_id: bool,
+    /// The file is being opened for backup intent
     pub open_for_backup_intent: bool,
+    /// The file cannot be compressed
     pub no_compression: bool,
 
+    /// Should be set to 0 and is ignored by the server
     pub open_requiring_oplock: bool,
+    /// Should be set to 0 and is ignored by the server
     pub disallow_exclusive: bool,
     #[skip]
     __: B2,
 
+    /// Should be set to 0 and the server must fail the request if set
     pub reserve_opfilter: bool,
+    /// If the file is a reparse point, open the reparse point itself
     pub open_reparse_point: bool,
+    /// In HSM environment, the file should not be recalled from tertiary storage
     pub open_no_recall: bool,
+    /// Open file to query for free space
     pub open_for_free_space_query: bool,
 
     #[skip]
     __: B8,
 }
 
-// share_access 4 byte flags:
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Specifies the sharing mode for the open.
+///
+/// Reference: MS-SMB2 2.2.13
+#[smb_dtyp::mbitfield]
 pub struct ShareAccessFlags {
+    /// Other opens are allowed to read this file while this open is present
     pub read: bool,
+    /// Other opens are allowed to write this file while this open is present
     pub write: bool,
+    /// Other opens are allowed to delete or rename this file while this open is present
     pub delete: bool,
     #[skip]
     __: B29,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// The SMB2 CREATE Response packet is sent by the server to notify the client of
+/// the status of its SMB2 CREATE Request.
+///
+/// Reference: MS-SMB2 2.2.14
+#[smb_response(size = 89)]
 pub struct CreateResponse {
-    #[bw(calc = 89)]
-    #[br(assert(_structure_size == 89))]
-    _structure_size: u16,
+    /// The oplock level that is granted to the client for this open
     pub oplock_level: OplockLevel,
+    /// Response flags indicating properties of the opened file
     pub flags: CreateResponseFlags,
+    /// The action taken in establishing the open
     pub create_action: CreateAction,
+    /// The time when the file was created
     pub creation_time: FileTime,
+    /// The time the file was last accessed
     pub last_access_time: FileTime,
+    /// The time when data was last written to the file
     pub last_write_time: FileTime,
+    /// The time when the file was last modified
     pub change_time: FileTime,
+    /// The size, in bytes, of the data that is allocated to the file
     pub allocation_size: u64,
+    /// The size, in bytes, of the file
     pub endof_file: u64,
+    /// The attributes of the file
     pub file_attributes: FileAttributes,
-    #[bw(calc = 0)]
-    _reserved2: u32,
+    reserved: u32,
+    /// The identifier of the open to a file or pipe that was established
     pub file_id: FileId,
     // assert it's 8-aligned
     #[br(assert(create_contexts_offset.value & 0x7 == 0))]
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     create_contexts_offset: PosMarker<u32>, // from smb header start
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     create_contexts_length: PosMarker<u32>, // bytes
 
+    /// The list of create contexts returned in this response.
     /// Use the [`CreateContextResponseData`]`::first_...` function family to get the first context of a specific type.
     #[br(seek_before = SeekFrom::Start(create_contexts_offset.value as u64))]
     #[br(map_stream = |s| s.take_seek(create_contexts_length.value.into()))]
     #[bw(write_with = PosMarker::write_roff_size, args(&create_contexts_offset, &create_contexts_length))]
-    pub create_contexts: ChainedItemList<ResponseCreateContext, 8>,
+    pub create_contexts: ChainedItemList<CreateContextResponse, 8>,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Response flags indicating properties of the opened file.
+/// Only valid for SMB 3.x dialect family.
+///
+/// Reference: MS-SMB2 2.2.14
+#[smb_dtyp::mbitfield]
 pub struct CreateResponseFlags {
+    /// When set, indicates the last portion of the file path is a reparse point
     pub reparsepoint: bool,
     #[skip]
     __: B7,
 }
 
-// CreateAction
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// The action taken in establishing the open.
+///
+/// Reference: MS-SMB2 2.2.14
+#[smb_response_binrw]
 #[brw(repr(u32))]
 pub enum CreateAction {
+    /// An existing file was deleted and a new file was created in its place
     Superseded = 0x0,
+    /// An existing file was opened
     Opened = 0x1,
+    /// A new file was created
     Created = 0x2,
+    /// An existing file was overwritten
     Overwritten = 0x3,
-}
-
-/// The common definition that wrap around all create contexts, for both request and response.
-///
-/// This is meant to be used within a [`ChainedItemList<T>`][smb_fscc::ChainedItemList<T>]!
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
-#[bw(import(is_last: bool))]
-#[allow(clippy::manual_non_exhaustive)]
-pub struct CreateContext<T>
-where
-    for<'a> T: BinRead<Args<'a> = (&'a Vec<u8>,)> + BinWrite<Args<'static> = ()>,
-{
-    #[bw(calc = PosMarker::default())]
-    _name_offset: PosMarker<u16>, // relative to ChainedItem (any access must consider +CHAINED_ITEM_PREFIX_SIZE from start of item)
-    #[bw(calc = u16::try_from(name.len()).unwrap())]
-    name_length: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
-    #[bw(calc = PosMarker::default())]
-    _data_offset: PosMarker<u16>,
-    #[bw(calc = PosMarker::default())]
-    _data_length: PosMarker<u32>,
-
-    #[brw(align_before = 8)]
-    #[br(count = name_length)]
-    #[br(seek_before = _name_offset.seek_from(_name_offset.value as u64 - CHAINED_ITEM_PREFIX_SIZE as u64))]
-    #[bw(write_with = PosMarker::write_roff_plus, args(&_name_offset, CHAINED_ITEM_PREFIX_SIZE as u64))]
-    pub name: Vec<u8>,
-
-    #[bw(align_before = 8)]
-    #[br(assert(_data_offset.value % 8 == 0))]
-    #[bw(write_with = PosMarker::write_roff_size_b_plus, args(&_data_offset, &_data_length, &_name_offset, CHAINED_ITEM_PREFIX_SIZE as u64))]
-    #[br(seek_before = _name_offset.seek_from_if(_data_offset.value as u64 - CHAINED_ITEM_PREFIX_SIZE as u64, _data_length.value > 0))]
-    #[br(map_stream = |s| s.take_seek(_data_length.value.into()), args(&name))]
-    pub data: T,
 }
 
 macro_rules! create_context_half {
@@ -278,16 +316,58 @@ macro_rules! create_context_half {
     ) => {
     pastey::paste! {
 
+
+/// The common definition that wrap around all create contexts, for both request and response.
+/// Create contexts are used to pass additional information to the server or receive additional
+/// information from the server in the CREATE request and response.
+///
+/// This is meant to be used within a [`ChainedItemList<T>`][smb_fscc::ChainedItemList<T>]!
+///
+/// Reference: MS-SMB2 2.2.13, 2.2.14
+#[[<smb_ $struct_name:lower _binrw>]]
+#[bw(import(is_last: bool))]
+#[allow(clippy::manual_non_exhaustive)]
+pub struct [<CreateContext $struct_name:camel>]
+{
+    #[bw(calc = PosMarker::default())]
+    #[br(temp)]
+    _name_offset: PosMarker<u16>, // relative to ChainedItem (any access must consider +CHAINED_ITEM_PREFIX_SIZE from start of item)
+    #[bw(calc = u16::try_from(name.len()).unwrap())]
+    #[br(temp)]
+    name_length: u16,
+    reserved: u16,
+    #[bw(calc = PosMarker::default())]
+    #[br(temp)]
+    _data_offset: PosMarker<u16>,
+    #[bw(calc = PosMarker::default())]
+    #[br(temp)]
+    _data_length: PosMarker<u32>,
+
+    /// The name of the create context
+    #[brw(align_before = 8)]
+    #[br(count = name_length)]
+    #[br(seek_before = _name_offset.seek_from(_name_offset.value as u64 - CHAINED_ITEM_PREFIX_SIZE as u64))]
+    #[bw(write_with = PosMarker::write_roff_plus, args(&_name_offset, CHAINED_ITEM_PREFIX_SIZE as u64))]
+    pub name: Vec<u8>,
+
+    /// The data payload of the create context
+    #[bw(align_before = 8)]
+    #[br(assert(_data_offset.value % 8 == 0))]
+    #[bw(write_with = PosMarker::write_roff_size_b_plus, args(&_data_offset, &_data_length, &_name_offset, CHAINED_ITEM_PREFIX_SIZE as u64))]
+    #[br(seek_before = _name_offset.seek_from_if(_data_offset.value as u64 - CHAINED_ITEM_PREFIX_SIZE as u64, _data_length.value > 0))]
+    #[br(map_stream = |s| s.take_seek(_data_length.value.into()), args(&name))]
+    pub data: [<CreateContext $struct_name Data>],
+}
+
 /// This trait is automatically implemented for all
 #[doc = concat!("[`Create", stringify!($struct_name), "`]")]
 /// create context values.
-pub trait [<CreateContextData $struct_name Value>] : Into<CreateContext<[<CreateContext $struct_name Data>]>> {
+pub trait [<CreateContextData $struct_name Value>] : Into<[<CreateContext $struct_name:camel>]> {
     const CONTEXT_NAME: &'static [u8];
 }
 
 #[doc = concat!("The [`Create", stringify!($struct_name), "`] Context data enum. ")]
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[[<smb_ $struct_name:lower _binrw>]]
 #[br(import(name: &Vec<u8>))]
 pub enum [<CreateContext $struct_name Data>] {
     $(
@@ -313,7 +393,10 @@ impl [<CreateContext $struct_name Data>] {
             }
         }
 
-        pub fn [<first_ $context_type:snake>](val: &Vec<CreateContext<Self>>) -> Option<&$req_type> {
+        #[doc = concat!("Get the first `", stringify!($context_type), "` create context from the list, if any.")]
+        ///
+        /// _Note: this function is auto-generated by the `make_create_context!` macro._
+        pub fn [<first_ $context_type:snake>](val: &[[<CreateContext $struct_name:camel>]]) -> Option<&$req_type> {
             for ctx in val {
                 if let Self::[<$context_type:camel $struct_name>](a) = &ctx.data {
                     return Some(a);
@@ -329,16 +412,16 @@ $(
         const CONTEXT_NAME: &'static [u8] = CreateContextType::[<$context_type:upper _NAME>];
     }
 
-    impl From<$req_type> for CreateContext<[<CreateContext $struct_name Data>]> {
+    impl From<$req_type> for [<CreateContext $struct_name:camel>] {
         fn from(req: $req_type) -> Self {
-            CreateContext::<[<CreateContext $struct_name Data>]> {
+            [<CreateContext $struct_name:camel>] {
                 name: <$req_type as [<CreateContextData $struct_name Value>]>::CONTEXT_NAME.to_vec(),
                 data: [<CreateContext $struct_name Data>]::[<$context_type:camel $struct_name>](req),
             }
         }
     }
 
-    impl TryInto<$req_type> for CreateContext<[<CreateContext $struct_name Data>]> {
+    impl TryInto<$req_type> for [<CreateContext $struct_name:camel>] {
         type Error = crate::SmbMsgError;
         fn try_into(self) -> crate::Result<$req_type> {
             match self.data {
@@ -351,8 +434,6 @@ $(
         }
     }
 )+
-
-pub type [<$struct_name CreateContext>] = CreateContext<[<CreateContext $struct_name Data>]>;
         }
     }
 }
@@ -446,64 +527,78 @@ make_create_context!(
     svhdxopendev: b"\x9C\xCB\xCF\x9E\x04\xC1\xE6\x43\x98\x0E\x15\x8D\xA1\xF6\xEC\x83", SvhdxOpenDeviceContext, SvhdxOpenDeviceContext;
 );
 
-macro_rules! empty_req {
-    ($name:ident) => {
-        #[binrw::binrw]
-        #[derive(Debug, PartialEq, Eq)]
-        pub struct $name;
-    };
-}
-
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq, Default)]
+/// Request for a durable handle that can survive brief network disconnections.
+///
+/// Reference: MS-SMB2 2.2.13.2.3
+#[smb_request_binrw]
 pub struct DurableHandleRequest {
-    #[bw(calc = 0)]
-    #[br(assert(durable_request == 0))]
-    durable_request: u128,
+    reserved: u128,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq, Default)]
+/// Response indicating the server has marked the open as durable.
+///
+/// Reference: MS-SMB2 2.2.14.2.3
+#[smb_response_binrw]
 pub struct DurableHandleResponse {
-    #[bw(calc = 0)]
-    _reserved: u64,
+    reserved: u64,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Request to reestablish a durable open after being disconnected.
+///
+/// Reference: MS-SMB2 2.2.13.2.4
+#[smb_request_binrw]
 pub struct DurableHandleReconnect {
+    /// The file ID for the open that is being reestablished
     pub durable_request: FileId,
 }
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq, Default)]
+/// Request for the server to retrieve maximal access information.
+///
+/// Reference: MS-SMB2 2.2.13.2.5
+#[smb_request_binrw]
+#[derive(Default)]
 pub struct QueryMaximalAccessRequest {
+    /// Optional timestamp for the query
     #[br(parse_with = binread_if_has_data)]
     pub timestamp: Option<FileTime>,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Specifies the allocation size for a newly created or overwritten file.
+///
+/// Reference: MS-SMB2 2.2.13.2.6
+#[smb_request_binrw]
 pub struct AllocationSize {
+    /// The size, in bytes, that the newly created file must have reserved on disk
     pub allocation_size: u64,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Request to open a version of the file at a previous point in time.
+///
+/// Reference: MS-SMB2 2.2.13.2.7
+#[smb_request_binrw]
 pub struct TimewarpToken {
+    /// The timestamp of the version of the file to be opened
     pub timestamp: FileTime,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Request for the server to return a lease on a file or directory.
+/// Also used by the server to respond with a granted lease.
+///
+/// Reference: MS-SMB2 2.2.13.2.8, 2.2.13.2.10, 2.2.14.2.10, 2.2.14.2.11
+#[smb_message_binrw]
 pub enum RequestLease {
     RqLsReqv1(RequestLeaseV1),
     RqLsReqv2(RequestLeaseV2),
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Version 1 lease request and response (SMB 2.1 and 3.x dialect family).
+/// Contains the lease key, state, flags, and duration.
+///
+/// Reference: MS-SMB2 2.2.13.2.8, 2.2.14.2.10
+#[smb_message_binrw]
 pub struct RequestLeaseV1 {
+    /// Client-generated key that identifies the owner of the lease
     pub lease_key: u128,
+    /// The requested lease state
     pub lease_state: LeaseState,
     #[bw(calc = 0)]
     #[br(assert(lease_flags == 0))]
@@ -512,107 +607,130 @@ pub struct RequestLeaseV1 {
     #[br(assert(lease_duration == 0))]
     lease_duration: u64,
 }
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+
+/// Version 2 lease request and response (SMB 3.x dialect family only).
+/// Includes parent lease key and epoch tracking for lease state changes.
+///
+/// Reference: MS-SMB2 2.2.13.2.10, 2.2.14.2.11
+#[smb_message_binrw]
 pub struct RequestLeaseV2 {
+    /// Client-generated key that identifies the owner of the lease
     pub lease_key: u128,
+    /// The requested lease state
     pub lease_state: LeaseState,
+    /// Lease flags
     pub lease_flags: LeaseFlags,
     #[bw(calc = 0)]
     #[br(assert(lease_duration == 0))]
     lease_duration: u64,
+    /// Key that identifies the owner of the lease for the parent directory
     pub parent_lease_key: u128,
+    /// Epoch value used to track lease state changes
     pub epoch: u16,
-    #[bw(calc = 0)]
     reserved: u16,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Flags for lease requests and responses.
+///
+/// Reference: MS-SMB2 2.2.13.2.10, 2.2.14.2.10, 2.2.14.2.11
+#[smb_dtyp::mbitfield]
 pub struct LeaseFlags {
     #[skip]
     __: B2,
+    /// When set, indicates that the ParentLeaseKey is set
     pub parent_lease_key_set: bool,
     #[skip]
     __: B29,
 }
 
-empty_req!(QueryOnDiskIdReq);
+/// Request for the server to return an identifier for the open file.
+///
+/// Reference: MS-SMB2 2.2.13.2.9
+#[smb_request_binrw]
+pub struct QueryOnDiskIdReq;
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Request for a durable or persistent handle (SMB 3.x dialect family only).
+///
+/// Reference: MS-SMB2 2.2.13.2.11
+#[smb_request_binrw]
 pub struct DurableHandleRequestV2 {
+    /// Time in milliseconds for which the server reserves the handle after failover
     pub timeout: u32,
+    /// Flags indicating whether a persistent handle is requested
     pub flags: DurableHandleV2Flags,
-    #[bw(calc = 0)]
-    _reserved: u64,
+    reserved: u64,
+    /// GUID that identifies the create request
     pub create_guid: Guid,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Flags for durable handle v2 requests.
+///
+/// Reference: MS-SMB2 2.2.13.2.11
+#[smb_dtyp::mbitfield]
 pub struct DurableHandleV2Flags {
     #[skip]
     __: bool,
-    pub persistent: bool, // 0x2
+    /// When set, a persistent handle is requested
+    pub persistent: bool,
     #[skip]
     __: B30,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Request to reestablish a durable open (SMB 3.x dialect family only).
+///
+/// Reference: MS-SMB2 2.2.13.2.12
+#[smb_request_binrw]
 pub struct DurableHandleReconnectV2 {
+    /// The file ID for the open that is being reestablished
     file_id: FileId,
+    /// Unique ID that identifies the create request
     create_guid: Guid,
+    /// Flags indicating whether a persistent handle is requested
     flags: DurableHandleV2Flags,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Application instance identifier (SMB 3.x dialect family only).
+///
+/// Reference: MS-SMB2 2.2.13.2.13
+#[smb_request_response(size = 20)]
 pub struct AppInstanceId {
-    #[bw(calc = 20)]
-    #[br(assert(structure_size == 20))]
-    structure_size: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
+    reserved: u16,
+    /// Unique ID that identifies an application instance
     pub app_instance_id: Guid,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Application instance version (SMB 3.1.1 dialect only).
+///
+/// Reference: MS-SMB2 2.2.13.2.15
+#[smb_request_response(size = 24)]
 pub struct AppInstanceVersion {
-    #[bw(calc = 24)]
-    #[br(assert(structure_size == 24))]
-    structure_size: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
-    #[bw(calc = 0)]
-    _reserved2: u32,
+    reserved: u16,
+    reserved: u16,
+    reserved: u32,
+    /// Most significant value of the version
     pub app_instance_version_high: u64,
+    /// Least significant value of the version
     pub app_instance_version_low: u64,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Context for opening a shared virtual disk file.
+///
+/// Reference: MS-SMB2 2.2.13.2.14, MS-RSVD 2.2.4.12, 2.2.4.32
+#[smb_message_binrw]
 pub enum SvhdxOpenDeviceContext {
     V1(SvhdxOpenDeviceContextV1),
     V2(SvhdxOpenDeviceContextV2),
 }
 
-/// [MS-RSVD sections 2.2.4.12 and 2.2.4.32.](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rsvd/6ec20c83-a6a7-49d5-ae60-72070f91d5e0)
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Version 1 context for opening a shared virtual disk file.
+///
+/// Reference: MS-RSVD 2.2.4.12
+#[smb_message_binrw]
 pub struct SvhdxOpenDeviceContextV1 {
     pub version: u32,
     pub has_initiator_id: Boolean,
-    #[bw(calc = 0)]
-    reserved1: u8,
-    #[bw(calc = 0)]
-    reserved2: u16,
+    reserved: u8,
+    reserved: u16,
     pub initiator_id: Guid,
     pub flags: u32,
     pub originator_flags: u32,
@@ -621,15 +739,15 @@ pub struct SvhdxOpenDeviceContextV1 {
     pub initiator_host_name: [u16; 126 / 2],
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Version 2 context for opening a shared virtual disk file.
+///
+/// Reference: MS-RSVD 2.2.4.32
+#[smb_message_binrw]
 pub struct SvhdxOpenDeviceContextV2 {
     pub version: u32,
     pub has_initiator_id: Boolean,
-    #[bw(calc = 0)]
-    reserved1: u8,
-    #[bw(calc = 0)]
-    reserved2: u16,
+    reserved: u8,
+    reserved: u16,
     pub initiator_id: Guid,
     pub flags: u32,
     pub originator_flags: u32,
@@ -643,17 +761,16 @@ pub struct SvhdxOpenDeviceContextV2 {
     pub virtual_size: u64,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+#[smb_response_binrw]
 pub struct QueryMaximalAccessResponse {
     // MS-SMB2, 2.2.14.2.5: "MaximalAccess field is valid only if QueryStatus is STATUS_SUCCESS.
     // he status code MUST be one of those defined in [MS-ERREF] section 2.3"
-    /// Use [`is_success()`][QueryMaximalAccessResponse::is_success] to check if the query was successful.
+    /// Use [`is_success()`][Self::is_success] to check if the query was successful.
     pub query_status: Status,
 
     /// The maximal access mask for the opened file.
     ///
-    /// Use [`access_mask()`][QueryMaximalAccessResponse::access_mask] to get the access mask if the query was successful.
+    /// Use [`maximal_access()`][Self::maximal_access] to get the access mask if the query was successful.
     pub maximal_access: FileAccessMask,
 }
 
@@ -673,59 +790,75 @@ impl QueryMaximalAccessResponse {
     }
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Response containing disk file and volume identifiers for the opened file.
+///
+/// Reference: MS-SMB2 2.2.14.2.9
+#[smb_response_binrw]
 pub struct QueryOnDiskIdResp {
+    /// 64-bit file identifier for the open on disk
     pub file_id: u64,
+    /// 64-bit volume identifier
     pub volume_id: u64,
-    #[bw(calc = 0)]
-    _reserved: u128,
+    reserved: u128,
 }
 
-#[binrw::binrw]
-#[derive(Debug, PartialEq, Eq)]
+/// Response for SMB 3.x durable or persistent handle request.
+/// Indicates successful creation of a durable/persistent handle.
+///
+/// Reference: MS-SMB2 2.2.14.2.12
+#[smb_response_binrw]
 pub struct DH2QResp {
+    /// Time in milliseconds the server waits for client reconnect after failover
     pub timeout: u32,
+    /// Flags indicating whether a persistent handle was granted
     pub flags: DurableHandleV2Flags,
 }
 
-#[binrw::binrw]
-#[derive(Debug)]
+/// The SMB2 CLOSE Request packet is used by the client to close an instance of a file
+/// that was opened previously with a successful SMB2 CREATE Request.
+///
+/// Reference: MS-SMB2 2.2.15
+#[smb_request(size = 24)]
 pub struct CloseRequest {
-    #[bw(calc = 24)]
-    #[br(assert(_structure_size == 24))]
-    _structure_size: u16,
     #[bw(calc = CloseFlags::new().with_postquery_attrib(true))]
     #[br(assert(_flags == CloseFlags::new().with_postquery_attrib(true)))]
     _flags: CloseFlags,
-    #[bw(calc = 0)]
-    _reserved: u32,
+    reserved: u32,
+    /// The identifier of the open to a file or named pipe that is being closed
     pub file_id: FileId,
 }
 
-#[binrw::binrw]
-#[derive(Debug)]
+/// The SMB2 CLOSE Response packet is sent by the server to indicate that an SMB2 CLOSE Request
+/// was processed successfully.
+///
+/// Reference: MS-SMB2 2.2.16
+#[smb_response(size = 60)]
 pub struct CloseResponse {
-    #[bw(calc = 60)]
-    #[br(assert(_structure_size == 60))]
-    _structure_size: u16,
     pub flags: CloseFlags,
-    #[bw(calc = 0)]
-    _reserved: u32,
+    reserved: u32,
+    /// The time when the file was created
     pub creation_time: FileTime,
+    /// The time when the file was last accessed
     pub last_access_time: FileTime,
+    /// The time when data was last written to the file
     pub last_write_time: FileTime,
+    /// The time when the file was last modified
     pub change_time: FileTime,
+    /// The size, in bytes, of the data that is allocated to the file
     pub allocation_size: u64,
+    /// The size, in bytes, of the file
     pub endof_file: u64,
+    /// The attributes of the file
     pub file_attributes: FileAttributes,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+/// Flags indicating how to process the CLOSE operation.
+///
+/// Reference: MS-SMB2 2.2.15, 2.2.16
+#[smb_dtyp::mbitfield]
 pub struct CloseFlags {
+    /// If set in request, the server MUST set the attribute fields in the response to valid values.
+    /// If set in response, the client MUST use the attribute fields that are returned.
     pub postquery_attrib: bool,
     #[skip]
     __: B15,
@@ -801,6 +934,7 @@ mod tests {
             0000000000000000000000000000000000000000"
     }
 
+    #[cfg(feature = "client")]
     use smb_dtyp::make_guid;
 
     test_response_read! {
@@ -844,39 +978,38 @@ mod tests {
      */
 
     use smb_dtyp::guid;
-    use smb_tests::*;
     use time::macros::datetime;
 
     // Tests for the following contexts are not implemented here:
     // - ExtA - already tested in smb-fscc & query info/ea tests
     // - SecD - already tested in smb-dtyp tests
 
-    test_binrw! {
+    test_binrw_request! {
         struct DurableHandleRequest {} => "00000000000000000000000000000000"
     }
 
-    test_binrw! {
+    test_binrw_response! {
         struct DurableHandleResponse {} => "0000000000000000"
     }
 
-    test_binrw! {
+    test_binrw_request! {
         struct QueryMaximalAccessRequest {
             timestamp: None,
         } => ""
     }
 
-    test_binrw! {
+    test_binrw_response! {
         struct QueryMaximalAccessResponse {
             query_status: Status::Success,
             maximal_access: FileAccessMask::from_bytes(0x001f01ffu32.to_le_bytes()),
         } => "00000000ff011f00"
     }
 
-    test_binrw! {
+    test_binrw_request! {
         struct QueryOnDiskIdReq {} => ""
     }
 
-    test_binrw! {
+    test_binrw_response! {
         struct QueryOnDiskIdResp {
             file_id: 0x2ae7010000000400,
             volume_id: 0xd9cf17b000000000,
@@ -884,7 +1017,7 @@ mod tests {
     }
 
     // TODO(TEST): RqLsV1
-    test_binrw! {
+    test_binrw_request! {
         RequestLease => rqlsv2: RequestLease::RqLsReqv2(RequestLeaseV2 {
             lease_key: guid!("b69d8fd8-184b-7c4d-a359-40c8a53cd2b7").as_u128(),
             lease_state: LeaseState::new().with_read_caching(true).with_handle_caching(true),
@@ -894,13 +1027,13 @@ mod tests {
         }) => "d88f9db64b184d7ca35940c8a53cd2b703000000040000000000000000000000a38e152ddb5549f79cd1095496a0662700000000"
     }
 
-    test_binrw! {
+    test_binrw_request! {
         struct AllocationSize {
             allocation_size: 0xebfef0d4c000,
         } => "00c0d4f0feeb0000"
     }
 
-    test_binrw! {
+    test_binrw_request! {
         struct DurableHandleRequestV2 {
             create_guid: guid!("5a08e844-45c3-234d-87c6-596d2bc8bca5"),
             flags: DurableHandleV2Flags::new(),
@@ -908,20 +1041,20 @@ mod tests {
         } => "0000000000000000000000000000000044e8085ac3454d2387c6596d2bc8bca5"
     }
 
-    test_binrw! {
+    test_binrw_response! {
         struct DH2QResp {
             timeout: 180000,
             flags: DurableHandleV2Flags::new(),
         } => "20bf020000000000"
     }
 
-    test_binrw! {
+    test_binrw_request! {
         struct TimewarpToken {
             timestamp: datetime!(2025-01-20 15:36:20.277632400).into(),
         } => "048fa10d516bdb01"
     }
 
-    test_binrw! {
+    test_binrw_request! {
         struct DurableHandleReconnectV2 {
             file_id: guid!("000000b3-0008-0000-dd00-000008000000").into(),
             create_guid: guid!("a23e428c-1bac-7e43-8451-91f9f2277a95"),

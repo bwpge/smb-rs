@@ -1,7 +1,6 @@
 //! MS-DTYP 2.4.6: Security Descriptor
 
 use binrw::prelude::*;
-use modular_bitfield::prelude::*;
 
 use crate::binrw_util::prelude::*;
 
@@ -13,9 +12,11 @@ use super::{ACL, SID};
 #[brw(little)]
 pub struct SecurityDescriptor {
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     _sd_begin: PosMarker<()>,
 
     #[bw(calc = 1)]
+    #[br(temp)]
     #[br(assert(_revision == 1))]
     _revision: u8,
     pub sbz1: u8,
@@ -23,12 +24,16 @@ pub struct SecurityDescriptor {
     pub control: SecurityDescriptorControl,
 
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     offset_owner: PosMarker<u32>,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     offset_group: PosMarker<u32>,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     offset_sacl: PosMarker<u32>,
     #[bw(calc = PosMarker::default())]
+    #[br(temp)]
     offset_dacl: PosMarker<u32>,
 
     #[br(if(offset_owner.value != 0))]
@@ -56,10 +61,7 @@ pub struct SecurityDescriptor {
     pub dacl: Option<ACL>,
 }
 
-#[bitfield]
-#[derive(BinWrite, BinRead, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[bw(map = |&x| Self::into_bytes(x))]
-#[br(map = Self::from_bytes)]
+#[smb_dtyp_derive::mbitfield]
 pub struct SecurityDescriptorControl {
     pub owner_defaulted: bool,
     pub group_defaulted: bool,

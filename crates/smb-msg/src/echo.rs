@@ -1,18 +1,20 @@
 //! Echo request and response messages
 use binrw::prelude::*;
+use smb_msg_derive::*;
 
-#[binrw::binrw]
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct EchoMesasge {
-    #[br(assert(_structure_size == 4))]
-    #[bw(calc = 4)]
-    _structure_size: u16,
-    #[bw(calc = 0)]
-    _reserved: u16,
+/// SMB2 Echo request/response.
+///
+/// MS-SMB2 2.2.28; 2.2.29
+#[smb_request_response(size = 4)]
+#[derive(Default)]
+pub struct EchoMessage {
+    reserved: u16,
 }
 
-pub type EchoRequest = EchoMesasge;
-pub type EchoResponse = EchoMesasge;
+/// Echo Request is the same as Echo Response (see: [`EchoMessage`])
+pub use EchoMessage as EchoRequest;
+/// Echo Response is the same as Echo Request (see: [`EchoMessage`])
+pub use EchoMessage as EchoResponse;
 
 #[cfg(test)]
 mod tests {
@@ -21,10 +23,6 @@ mod tests {
     use super::*;
 
     test_binrw! {
-        struct EchoRequest {} => "04000000"
-    }
-
-    test_binrw! {
-        struct EchoResponse {} => "04000000"
+        struct EchoMessage {} => "04000000"
     }
 }
