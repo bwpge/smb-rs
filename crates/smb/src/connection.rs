@@ -213,10 +213,13 @@ impl Connection {
             let smb2_negotiate_response = message.content.to_negotiate()?;
 
             // 3. Make sure dialect is smb2*, message ID is 0.
-            if smb2_negotiate_response.dialect_revision != NegotiateDialect::Smb02Wildcard {
-                return Err(Error::InvalidMessage(
-                    "Expected SMB2 wildcard dialect".to_string(),
-                ));
+            match smb2_negotiate_response.dialect_revision {
+                NegotiateDialect::Smb0202
+                | NegotiateDialect::Smb021
+                | NegotiateDialect::Smb02Wildcard => (),
+                _ => {
+                    return Err(Error::InvalidMessage("Expected SMB2 dialect".to_string()));
+                }
             }
             if message.header.message_id != 0 {
                 return Err(Error::InvalidMessage("Expected message ID 0".to_string()));
